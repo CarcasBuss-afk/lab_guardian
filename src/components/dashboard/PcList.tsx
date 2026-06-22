@@ -14,6 +14,16 @@ interface PcListProps {
   onRemovePc: (pcId: string) => void;
 }
 
+// Un PC è considerato online se ha inviato un heartbeat di recente.
+// L'agente non può segnalare la disconnessione (REST senza onDisconnect),
+// quindi lo stato si deduce dalla freschezza di lastSeen.
+const ONLINE_THRESHOLD_MS = 90_000;
+
+function isOnline(pc: PcConfig): boolean {
+  if (pc.lastSeen) return Date.now() - pc.lastSeen < ONLINE_THRESHOLD_MS;
+  return pc.online;
+}
+
 // Opzioni dei tre stati di controllo del PC
 const OVERRIDE_OPTIONS: { value: PcOverride; label: string; active: string }[] = [
   { value: "inherit", label: "Segue aula", active: "bg-zinc-900 text-white" },
@@ -79,9 +89,9 @@ export default function PcList({
                 <span
                   className={cn(
                     "h-2.5 w-2.5 rounded-full",
-                    pc.online ? "bg-emerald-500" : "bg-zinc-300"
+                    isOnline(pc) ? "bg-emerald-500" : "bg-zinc-300"
                   )}
-                  title={pc.online ? "Online" : "Offline"}
+                  title={isOnline(pc) ? "Online" : "Offline"}
                 />
                 <span className="font-mono text-sm text-zinc-900">{pc.hostname}</span>
               </div>

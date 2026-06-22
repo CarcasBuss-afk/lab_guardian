@@ -31,6 +31,16 @@ serviceAccountKey.json
 *serviceAccountKey.json
 *-firebase-adminsdk-*.json
 
+# Agente Python — build e config locale (mai committare)
+agent/.buildenv/
+agent/build/
+agent/dist/
+agent/__pycache__/
+agent/*.spec
+agent/config.json
+agent/proxy_backup.json
+agent/agent.log
+
 # Vercel
 .vercel/
 

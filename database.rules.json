@@ -4,7 +4,17 @@
     ".write": false,
     "labs": {
       ".read": "auth != null",
-      ".write": "auth != null"
+      "$room": {
+        ".write": "auth.token.teacher === true",
+        "pcs": {
+          "$pc": {
+            ".write": "auth.token.teacher === true",
+            "online": { ".write": "auth != null" },
+            "lastSeen": { ".write": "auth != null" },
+            "hostname": { ".write": "auth != null" }
+          }
+        }
+      }
     }
   }
 }

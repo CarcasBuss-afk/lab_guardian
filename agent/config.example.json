@@ -1,0 +1,9 @@
+{
+  "apiKey": "LA_TUA_NEXT_PUBLIC_FIREBASE_API_KEY",
+  "databaseURL": "https://lab-guardian-default-rtdb.europe-west1.firebasedatabase.app",
+  "room": "aula1",
+  "agentEmail": "agent@lab-guardian.example",
+  "agentPassword": "PASSWORD_ACCOUNT_AGENTE",
+  "proxyAddress": "127.0.0.1:8080",
+  "heartbeatSeconds": 30
+}

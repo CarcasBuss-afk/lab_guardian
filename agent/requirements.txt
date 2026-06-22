@@ -1,0 +1,6 @@
+# Dipendenze per la build dell'agente (servono solo sul PC di sviluppo,
+# non sui PC del laboratorio: lì gira l'eseguibile bundle).
+
+mitmproxy>=11,<12
+requests>=2.31
+pyinstaller>=6.10
