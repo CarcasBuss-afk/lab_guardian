@@ -1,0 +1,12 @@
+# Agente Python: gira sui PC del lab, non va su Vercel
+agent/
+
+# Documenti e config locali Firebase non necessari al deploy
+lab-traffic-control-spec.md
+firebase.json
+database.rules.json
+
+# Segreti: mai nel deploy
+serviceAccountKey.json
+*.serviceAccountKey.json
+.env.local

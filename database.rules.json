@@ -1,0 +1,13 @@
+{
+  "rules": {
+    "//": "Regole di default: tutto bloccato. L'agente Python usa l'Admin SDK e bypassa queste regole.",
+    ".read": false,
+    ".write": false,
+
+    "labs": {
+      "//": "Canale di controllo: solo docenti autenticati possono leggere/scrivere le configurazioni aula.",
+      ".read": "auth != null",
+      ".write": "auth != null"
+    }
+  }
+}

@@ -61,4 +61,4 @@
 ## Riferimenti
 
 - **Contesto progetto**: consulta [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md) per obiettivi, funzionalità e decisioni architetturali
-- **Regole Firestore**: consulta [firestore.rules](firestore.rules) prima di modificare la sicurezza del database
+- **Regole Realtime Database**: consulta [database.rules.json](database.rules.json) prima di modificare la sicurezza del database
