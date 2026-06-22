@@ -1,7 +1,7 @@
-# Contesto Progetto — [NOME PROGETTO]
+# Contesto Progetto — lab-guardian
 
 ## Obiettivo
-[Descrizione in 2-3 frasi di cosa fa il progetto e quale problema risolve]
+App per monitorare la sicurezza e gli accessi di un laboratorio. Tiene traccia di chi entra ed esce e dello stato di sicurezza degli ambienti, riducendo i rischi legati ad accessi non autorizzati e situazioni non monitorate.
 
 ## Utenti target
 [Chi userà questa applicazione? Es: studenti, insegnanti, clienti di un e-commerce...]

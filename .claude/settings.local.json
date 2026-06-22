@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "MultiEdit",
+      "Bash",
+      "Glob",
+      "Grep"
+    ],
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(rm -rf /*)",
+      "Bash(sudo rm -rf *)",
+      "Bash(git push --force*)",
+      "Bash(git push * --force*)",
+      "Bash(git push -f*)",
+      "Bash(git push * -f*)",
+      "Bash(> /dev/sda)",
+      "Bash(mkfs *)",
+      "Bash(dd if=/dev/zero *)",
+      "Bash(git reset --hard*)",
+      "Bash(git * reset --hard*)",
+      "Bash(chmod -R 777 *)",
+      "Bash(firebase projects:delete*)",
+      "Bash(firebase firestore:delete*)",
+      "Bash(vercel rm*)",
+      "Bash(vercel remove*)",
+      "Bash(DROP DATABASE*)",
+      "Bash(DROP TABLE*)",
+      "Bash(npx next telemetry enable*)"
+    ]
+  }
+}

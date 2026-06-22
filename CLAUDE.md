@@ -15,7 +15,7 @@
 
 ## Stack tecnologico
 
-- **Progetto**: [NOME PROGETTO]
+- **Progetto**: lab-guardian
 - **Frontend**: Next.js (App Router) + TypeScript + Tailwind CSS
 - **Database**: Firebase Firestore
 - **Autenticazione**: Firebase Auth
