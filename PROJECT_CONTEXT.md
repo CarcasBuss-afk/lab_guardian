@@ -1,45 +1,51 @@
 # Contesto Progetto — lab-guardian
 
 ## Obiettivo
-App per monitorare la sicurezza e gli accessi di un laboratorio. Tiene traccia di chi entra ed esce e dello stato di sicurezza degli ambienti, riducendo i rischi legati ad accessi non autorizzati e situazioni non monitorate.
+Sistema di controllo del traffico web nei laboratori di informatica scolastici (Lab Traffic Control). Permette al docente di decidere, in tempo reale e da remoto, quali siti web sono accessibili dagli studenti. Dettaglio tecnico completo in [lab-traffic-control-spec.md](lab-traffic-control-spec.md).
 
 ## Utenti target
-[Chi userà questa applicazione? Es: studenti, insegnanti, clienti di un e-commerce...]
+- **Docente**: gestisce le regole di accesso delle aule dalla dashboard web.
+- **Studenti**: usano i PC del laboratorio; il traffico è filtrato dall'agente locale.
 
 ## Funzionalità principali
-- [Feature 1]
-- [Feature 2]
-- [Feature 3]
+- Dashboard docente con login (Firebase Auth).
+- Gestione per aula: attiva/disattiva filtro, whitelist e blacklist con wildcard, messaggio agli studenti, preset rapidi.
+- **Controllo per singolo PC**: ogni PC può essere `blocked` (bloccato), `free` (libero) o `inherit` (segue le regole dell'aula). L'override del PC ha priorità sulle regole dell'aula.
+- Propagazione in tempo reale via Realtime Database verso gli agenti.
 
-## Priorità (MVP)
-[Quali funzionalità sono essenziali per la prima versione? Elencare in ordine di priorità.
-Tutto il resto è "nice to have" — Claude Code non deve proporlo spontaneamente.]
+## Architettura
+```
+[Dashboard docente]  ←→  [Firebase Realtime DB]  ←→  [Agente su ogni PC]
+  (Next.js/Vercel)         (canale di controllo)      (Python + mitmproxy)
+```
+- **Database**: Realtime Database (non Firestore) — gli agenti usano listener realtime.
+- **Auth**: Firebase Auth email/password. I docenti vengono creati a mano in console.
+- **Agente**: usa l'Admin SDK e bypassa le regole del DB. Da realizzare in `agent/`.
 
-## Stile e design
-- **Tono**: [formale / informale / educativo / professionale]
-- **Stile visivo**: [minimal / colorato / moderno / classico]
-- **Colori principali**: [es. blu #3B82F6, bianco, grigio chiaro — oppure "da definire"]
-- **Riferimenti**: [siti o app con uno stile simile a quello desiderato, se presenti]
-
-## Decisioni architetturali
-[Scelte importanti già prese. Es: "Autenticazione solo con Google", "Dati tutti su Firestore, niente API esterne", ecc.]
-
-## Struttura dati (Firestore)
-[Collezioni principali e relazioni. Es:]
-- `users/` — profili utente
-- `projects/` — progetti creati dagli utenti
+## Struttura dati (Realtime Database)
+```
+/labs/{room}/
+  active: boolean            # filtro attivo per l'intera aula
+  whitelist: string[]        # domini permessi (wildcard: *.dominio.com)
+  blacklist: string[]        # domini bloccati, priorità sulla whitelist
+  message: string            # messaggio agli studenti quando un sito è bloccato
+  pcs/{hostname}/
+    hostname: string
+    online: boolean          # mantenuto dall'agente
+    lastSeen: number         # timestamp ultimo contatto (opz.)
+    override: "blocked" | "free" | "inherit"
+```
 
 ## Pagine/Route principali
-- `/` — Homepage
-- `/dashboard` — Dashboard utente
-- `/auth` — Login/Registrazione
+- `/` — Login docente
+- `/dashboard` — Pannello di controllo (selettore aula, toggle, liste, messaggio, preset, PC)
 
-## Endpoint API
-[Elenco delle API routes man mano che vengono create. Es:]
-- `GET /api/users` — lista utenti
-- `POST /api/projects` — crea nuovo progetto
-
-[Aggiornare questa sezione ogni volta che si aggiunge un endpoint.]
+## Stato di avanzamento
+- [x] Setup Firebase (Realtime DB + Auth + Admin SDK) verificato.
+- [x] Dashboard docente (login + pannello aula + controllo per singolo PC).
+- [ ] Agente Python (`agent/`).
+- [ ] Deploy su Vercel.
 
 ## Note
-[Qualsiasi altra informazione utile per Claude Code]
+- I segreti (`.env.local`, service account key) non vanno mai committati né deployati (vedi `.vercelignore`).
+- Logica di filtraggio: blacklist ha priorità sulla whitelist; override del PC ha priorità sulle regole dell'aula.

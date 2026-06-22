@@ -47,6 +47,7 @@ function mapFirebaseError(code: string): string {
   const errorMap: Record<string, string> = {
     "auth/user-not-found": "Utente non trovato.",
     "auth/wrong-password": "Password non corretta.",
+    "auth/invalid-credential": "Email o password non corretti.",
     "auth/email-already-in-use": "Questa email è già registrata.",
     "auth/weak-password": "La password è troppo debole.",
     "auth/invalid-email": "Indirizzo email non valido.",
