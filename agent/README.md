@@ -186,6 +186,8 @@ L'agente copre il filtraggio web, ma alcune contromisure vanno fatte a parte
 - [x] **Studenti con account non-admin** (la misura più importante).
 - [x] Servizio agente come **SYSTEM** (non terminabile dagli studenti).
 - [x] **QUIC bloccato** (firewall + policy) — gestito dall'agente.
+- [x] **Chiusura browser + pulizia cache all'attivazione del blocco** — gestito
+  dall'agente: chiude il buco dei contenuti già in cache e dei giochi PWA offline.
 - [ ] **Blocco estensioni** browser (VPN) via policy.
 - [ ] **USB disabilitate** (BIOS/GPO) contro i browser portatili.
 - [ ] **Porte VPN** bloccate via firewall.

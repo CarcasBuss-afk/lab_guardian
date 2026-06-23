@@ -21,6 +21,7 @@ import time
 import system_proxy
 import firewall
 import browser_policy
+import browser_control
 from firebase_client import FirebaseAgent
 from proxy_filter import FilterState, LabFilter
 
@@ -65,24 +66,42 @@ def normalize_upstream(server):
     return server or None
 
 
-def network_probe_loop(state, stop_event):
-    """Verifica periodicamente la connettività generale (per il fail-open)."""
-    while not stop_event.is_set():
-        ok = False
-        try:
-            with socket.create_connection(("1.1.1.1", 53), timeout=3):
-                ok = True
-        except OSError:
-            ok = False
-        state.set_network_ok(ok)
-        stop_event.wait(15)
-
-
 def reapply_proxy_loop(address, stop_event):
     """Riapplica le impostazioni proxy per neutralizzare le manomissioni."""
     while not stop_event.is_set():
         system_proxy.reapply_filter_proxy(address)
         stop_event.wait(10)
+
+
+class ConfigWatcher:
+    """Aggiorna lo stato e, quando il blocco viene ATTIVATO, chiude i browser e
+    ne pulisce la cache. Si attiva solo sulla transizione "non bloccato ->
+    bloccato" (attivazione filtro aula o PC su "Bloccato"), NON sulle modifiche
+    di whitelist/blacklist.
+    """
+
+    def __init__(self, state, enforce_enabled):
+        self.state = state
+        self.enforce_enabled = enforce_enabled
+        self._prev_restrictive = None
+
+    @staticmethod
+    def _is_restrictive(snap):
+        # Il PC filtra/blocca davvero quando:
+        if snap["override"] == "blocked":
+            return True
+        if snap["override"] == "free":
+            return False
+        return snap["active"]  # override "inherit": dipende dal filtro aula
+
+    def on_update(self, lab):
+        self.state.update_from_lab(lab)
+        restrictive = self._is_restrictive(self.state.snapshot())
+        # Trigger solo alla transizione non-restrittivo -> restrittivo
+        if self.enforce_enabled and self._prev_restrictive is False and restrictive:
+            log.info("Blocco attivato: avvio chiusura browser e pulizia cache")
+            threading.Thread(target=browser_control.enforce_clean, daemon=True).start()
+        self._prev_restrictive = restrictive
 
 
 async def run_proxy(state, listen_port, upstream):
@@ -145,12 +164,15 @@ def run(apply_system=True):
         # browser a mano su 127.0.0.1:8080 per provare il filtraggio.
         log.info("MODALITA' TEST: nessuna modifica al sistema")
 
-    # 3. Stato condiviso e sincronizzazione con Firebase
+    # 3. Stato condiviso e sincronizzazione con Firebase.
+    #    Il watcher chiude i browser quando il blocco viene attivato (solo in
+    #    installazione reale, mai in modalità --test).
     state = FilterState(hostname)
+    watcher = ConfigWatcher(state, enforce_enabled=apply_system)
     fb = FirebaseAgent(
         config["apiKey"], config["databaseURL"], config["room"],
         config["agentEmail"], config["agentPassword"], hostname,
-        on_update=state.update_from_lab,
+        on_update=watcher.on_update,
         heartbeat_seconds=config.get("heartbeatSeconds", 30),
     )
     try:
@@ -159,9 +181,8 @@ def run(apply_system=True):
         log.error("Autenticazione Firebase fallita: %s", e)
     fb.start()
 
-    # 4. Thread di supporto: probe di rete e riapplicazione proxy
+    # 4. Thread di supporto: riapplicazione periodica del proxy (anti-manomissione)
     stop_event = threading.Event()
-    threading.Thread(target=network_probe_loop, args=(state, stop_event), daemon=True).start()
     if apply_system:
         threading.Thread(target=reapply_proxy_loop, args=(address, stop_event), daemon=True).start()
 

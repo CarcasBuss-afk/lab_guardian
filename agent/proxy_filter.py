@@ -7,7 +7,7 @@ tunnel TCP grezzo.
 Priorità delle decisioni:
 1. Override del singolo PC:  "blocked" -> blocca tutto;  "free" -> permetti tutto;
    "inherit" -> applica le regole dell'aula.
-2. Fail-open: se non c'è connettività o non è mai arrivata una config -> permetti.
+2. Fail-open: solo se non è mai arrivata una configurazione (PC mai impostato).
 3. Regole aula: se il filtro è spento -> permetti; altrimenti
    blacklist (priorità) -> blocca;  whitelist -> permetti;  resto -> blocca.
 """
@@ -30,7 +30,6 @@ class FilterState:
         self.override = "inherit"
         self.message = "Sito bloccato dal docente."
         self.has_config = False  # almeno una config ricevuta
-        self.network_ok = True   # connettività di rete generale
 
     def update_from_lab(self, lab):
         """Aggiorna lo stato dalla configurazione dell'aula ricevuta da Firebase."""
@@ -44,10 +43,6 @@ class FilterState:
             self.override = pc.get("override", "inherit")
             self.has_config = True
 
-    def set_network_ok(self, ok):
-        with self._lock:
-            self.network_ok = ok
-
     def snapshot(self):
         with self._lock:
             return {
@@ -57,7 +52,6 @@ class FilterState:
                 "override": self.override,
                 "message": self.message,
                 "has_config": self.has_config,
-                "network_ok": self.network_ok,
             }
 
 
@@ -75,8 +69,8 @@ def is_allowed(host, snap):
     if snap["override"] == "blocked":
         return False
 
-    # 2. Fail-open: prima config mai ricevuta o nessuna connettività
-    if not snap["has_config"] or not snap["network_ok"]:
+    # 2. Fail-open: solo se non è mai arrivata una configurazione (PC mai impostato)
+    if not snap["has_config"]:
         return True
 
     # 3. Regole dell'aula (override "inherit")
