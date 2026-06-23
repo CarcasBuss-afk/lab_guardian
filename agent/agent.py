@@ -122,22 +122,28 @@ def cleanup(config):
     log.info("Cleanup completato")
 
 
-def run():
+def run(apply_system=True):
     config = load_config()
     hostname = socket.gethostname()
     address = config.get("proxyAddress", "127.0.0.1:8080")
     listen_port = int(address.split(":")[-1])
 
-    # 1. Rileva e salva il proxy esistente (eventuale proxy scolastico upstream)
-    system_proxy.backup_original_proxy(BACKUP_PATH)
-    upstream = normalize_upstream(system_proxy.detect_school_proxy(address))
-    if upstream:
-        log.info("Rilevato proxy scolastico upstream: %s", upstream)
+    upstream = None
+    if apply_system:
+        # 1. Rileva e salva il proxy esistente (eventuale proxy scolastico upstream)
+        system_proxy.backup_original_proxy(BACKUP_PATH)
+        upstream = normalize_upstream(system_proxy.detect_school_proxy(address))
+        if upstream:
+            log.info("Rilevato proxy scolastico upstream: %s", upstream)
 
-    # 2. Applica proxy di sistema, firewall (QUIC) e policy browser
-    system_proxy.enable_filter_proxy(address)
-    firewall.block_quic()
-    browser_policy.apply_policies()
+        # 2. Applica proxy di sistema, firewall (QUIC) e policy browser
+        system_proxy.enable_filter_proxy(address)
+        firewall.block_quic()
+        browser_policy.apply_policies()
+    else:
+        # Modalità test: nessuna modifica al sistema. Imposta il proxy del
+        # browser a mano su 127.0.0.1:8080 per provare il filtraggio.
+        log.info("MODALITA' TEST: nessuna modifica al sistema")
 
     # 3. Stato condiviso e sincronizzazione con Firebase
     state = FilterState(hostname)
@@ -156,7 +162,8 @@ def run():
     # 4. Thread di supporto: probe di rete e riapplicazione proxy
     stop_event = threading.Event()
     threading.Thread(target=network_probe_loop, args=(state, stop_event), daemon=True).start()
-    threading.Thread(target=reapply_proxy_loop, args=(address, stop_event), daemon=True).start()
+    if apply_system:
+        threading.Thread(target=reapply_proxy_loop, args=(address, stop_event), daemon=True).start()
 
     # 5. Proxy di filtraggio (blocca finché il servizio è attivo)
     try:
@@ -178,11 +185,14 @@ def main():
         cleanup(config)
         return 0
 
+    # Modalità test: avvia solo proxy + Firebase, senza toccare il sistema
+    apply_system = "--test" not in sys.argv
+
     # Riavvio automatico in caso di errore non gestito (watchdog interno;
     # NSSM riavvia comunque il processo se termina del tutto).
     while True:
         try:
-            run()
+            run(apply_system=apply_system)
             break
         except Exception as e:  # noqa: BLE001
             log.exception("Errore non gestito, riavvio tra 5s: %s", e)

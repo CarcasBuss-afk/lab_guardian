@@ -41,6 +41,9 @@ agent/config.json
 agent/proxy_backup.json
 agent/agent.log
 
+# Chiavetta USB assemblata (contiene credenziali agente, mai committare)
+usb/
+
 # Vercel
 .vercel/
 

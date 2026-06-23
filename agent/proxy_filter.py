@@ -16,7 +16,6 @@ import fnmatch
 import threading
 
 from mitmproxy import http
-from mitmproxy.proxy.layers import tcp, tls
 
 
 class FilterState:
@@ -94,20 +93,21 @@ class LabFilter:
     def __init__(self, state):
         self.state = state
 
-    def next_layer(self, data):
-        """Disabilita la decifratura TLS: dopo un CONNECT consentito il traffico
-        passa come tunnel TCP grezzo, così non serve installare alcun certificato."""
-        if isinstance(data.layer, tls.ClientTLSLayer):
-            data.layer = tcp.TCPLayer(data.context)
-
     def http_connect(self, flow: http.HTTPFlow):
-        """Filtra le richieste HTTPS in base all'hostname del CONNECT."""
+        """Filtra le richieste HTTPS sull'hostname del CONNECT (prima del TLS).
+        Se il sito è bloccato, rifiuta il tunnel con un 403."""
         snap = self.state.snapshot()
         if not is_allowed(flow.request.host, snap):
             flow.response = http.Response.make(
                 403, snap["message"].encode("utf-8"),
                 {"Content-Type": "text/plain; charset=utf-8"},
             )
+
+    def tls_clienthello(self, data):
+        """Le connessioni HTTPS che superano il CONNECT sono consentite: le
+        lasciamo passare SENZA decifrarle (nessun certificato da installare).
+        Così il browser dialoga direttamente col certificato vero del sito."""
+        data.ignore_connection = True
 
     def request(self, flow: http.HTTPFlow):
         """Filtra le richieste HTTP in chiaro."""

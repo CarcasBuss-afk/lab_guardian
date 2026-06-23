@@ -113,6 +113,27 @@ Lo script ferma il servizio, **ripristina il proxy originale** (incluso un
 eventuale proxy scolastico), rimuove la regola firewall e le policy dei browser,
 quindi cancella `C:\Program Files\LabGuardian\`.
 
+### Verifica della disinstallazione
+
+Oltre al fatto che la navigazione torna normale, apri un **Prompt dei comandi
+come amministratore** e lancia questi controlli:
+
+```cmd
+sc query LabGuardianAgent
+netsh advfirewall firewall show rule name="LabGuardian Block QUIC (UDP 443)"
+reg query "HKLM\SOFTWARE\Policies\Google\Chrome" /v QuicAllowed
+```
+
+Risultati attesi (= tutto ripulito):
+- `sc query` → errore **1060** ("Il servizio specificato non esiste").
+- `netsh ...` → "**Nessuna regola corrisponde** ai criteri specificati".
+- `reg query ...` → "**Impossibile trovare** il file/chiave specificato".
+
+Verifica infine che la cartella **`C:\Program Files\LabGuardian`** non esista più.
+
+Se uno di questi controlli non risulta pulito, vedi
+[Ripristino di emergenza](#7-ripristino-di-emergenza).
+
 ---
 
 ## 7. Ripristino di emergenza

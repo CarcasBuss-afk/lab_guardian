@@ -38,6 +38,11 @@ class FirebaseAgent:
         self.on_update = on_update
         self.heartbeat_seconds = heartbeat_seconds
 
+        # Sessione che IGNORA il proxy di sistema/registro: l'agente deve
+        # parlare con Firebase direttamente, mai attraverso il proxy locale.
+        self._session = requests.Session()
+        self._session.trust_env = False
+
         self._id_token = None
         self._refresh_token = None
         self._token_acquired_at = 0
@@ -50,7 +55,7 @@ class FirebaseAgent:
 
     def authenticate(self):
         """Login come account agente. Solleva eccezione in caso di errore."""
-        resp = requests.post(
+        resp = self._session.post(
             f"{SIGN_IN_URL}?key={self.api_key}",
             json={"email": self.email, "password": self.password, "returnSecureToken": True},
             timeout=15,
@@ -66,7 +71,7 @@ class FirebaseAgent:
         if time.time() - self._token_acquired_at < TOKEN_TTL_SECONDS:
             return
         try:
-            resp = requests.post(
+            resp = self._session.post(
                 f"{REFRESH_URL}?key={self.api_key}",
                 data={"grant_type": "refresh_token", "refresh_token": self._refresh_token},
                 timeout=15,
@@ -120,7 +125,7 @@ class FirebaseAgent:
                 self._refresh_if_needed()
                 headers = {"Accept": "text/event-stream"}
                 url = f"{self._lab_path()}?auth={self._id_token}"
-                with requests.get(url, headers=headers, stream=True, timeout=(15, 75)) as resp:
+                with self._session.get(url, headers=headers, stream=True, timeout=(15, 75)) as resp:
                     resp.raise_for_status()
                     self._connected.set()
                     backoff = 2
@@ -163,7 +168,7 @@ class FirebaseAgent:
                     # Timestamp lato server di Firebase
                     "lastSeen": {".sv": "timestamp"},
                 }
-                requests.patch(
+                self._session.patch(
                     f"{self._pc_path()}?auth={self._id_token}",
                     json=payload,
                     timeout=15,
@@ -176,7 +181,7 @@ class FirebaseAgent:
         """Segna il PC come offline (usato alla disinstallazione)."""
         try:
             self._refresh_if_needed()
-            requests.patch(
+            self._session.patch(
                 f"{self._pc_path()}?auth={self._id_token}",
                 json={"online": False},
                 timeout=15,
