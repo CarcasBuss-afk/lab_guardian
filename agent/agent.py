@@ -42,10 +42,17 @@ LOG_PATH = os.path.join(BASE_DIR, "agent.log")
 
 
 def setup_logging():
+    try:
+        handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
+    except OSError:
+        # Se il log e' inaccessibile (file bloccato da un processo in chiusura o
+        # permessi) NON dobbiamo bloccare l'avvio: e' fondamentale soprattutto
+        # per --cleanup, che deve poter ripristinare il sistema comunque.
+        handler = logging.NullHandler()
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[logging.FileHandler(LOG_PATH, encoding="utf-8")],
+        handlers=[handler],
     )
 
 
@@ -73,6 +80,40 @@ def reapply_proxy_loop(address, stop_event):
         stop_event.wait(10)
 
 
+def lockdown_watchdog(fb, watcher, stop_event, grace_seconds=90):
+    """Rete di sicurezza anti-blocco.
+
+    Se il muro del firewall e' alzato ma l'agente perde la connessione a
+    Firebase per piu' di 'grace_seconds', abbassa il muro: cosi' un PC non puo'
+    mai restare bloccato in modo irreversibile. Il filtraggio per dominio resta
+    comunque garantito dal proxy locale (modalita' degradata, finche' non si
+    riattiva esplicitamente il blocco).
+    """
+    down_since = None
+    while not stop_event.is_set():
+        stop_event.wait(15)
+        if stop_event.is_set():
+            break
+        if watcher.lockdown_raised and not fb.connected:
+            now = time.time()
+            if down_since is None:
+                down_since = now
+            elif now - down_since >= grace_seconds:
+                log.warning(
+                    "Agente isolato da >%ds con lockdown attivo: abbasso il muro "
+                    "(filtra solo il proxy finche' non si riattiva il blocco)",
+                    grace_seconds,
+                )
+                firewall.disable_lockdown()
+                watcher.lockdown_raised = False
+                # Evita la ri-attivazione automatica (e quindi l'oscillazione):
+                # servira' una nuova transizione esplicita off->on per riprovare.
+                watcher._prev_restrictive = True
+                down_since = None
+        else:
+            down_since = None
+
+
 class ConfigWatcher:
     """Aggiorna lo stato e reagisce alle transizioni del blocco.
 
@@ -89,6 +130,9 @@ class ConfigWatcher:
         self.enforce_enabled = enforce_enabled
         self.agent_program = agent_program
         self._prev_restrictive = None
+        # True quando il muro del firewall e' effettivamente alzato (serve al
+        # watchdog anti-blocco per sapere quando intervenire).
+        self.lockdown_raised = False
 
     @staticmethod
     def _is_restrictive(snap):
@@ -107,7 +151,7 @@ class ConfigWatcher:
         # update all'avvio, dove _prev_restrictive vale None).
         if self.enforce_enabled and restrictive != self._prev_restrictive:
             if restrictive:
-                firewall.enable_lockdown(self.agent_program)
+                self.lockdown_raised = firewall.enable_lockdown(self.agent_program)
                 # Chiusura browser + pulizia cache solo su ATTIVAZIONE reale
                 # (non al primo avvio del servizio col blocco gia' attivo).
                 if self._prev_restrictive is False:
@@ -115,6 +159,7 @@ class ConfigWatcher:
                     threading.Thread(target=browser_control.enforce_clean, daemon=True).start()
             else:
                 firewall.disable_lockdown()
+                self.lockdown_raised = False
 
         self._prev_restrictive = restrictive
 
@@ -150,10 +195,20 @@ def cleanup(config):
     except Exception as e:  # noqa: BLE001 - best effort
         log.warning("Impossibile segnare offline: %s", e)
 
-    system_proxy.restore_original_proxy(BACKUP_PATH)
-    firewall.remove_quic_block()
-    firewall.disable_lockdown()  # ripristina l'uscita predefinita e toglie le regole
-    browser_policy.remove_policies()
+    # Ogni ripristino in modo indipendente: se uno fallisce, gli altri devono
+    # comunque eseguire (es. il proxy deve tornare normale anche se il firewall
+    # da' errore, e viceversa).
+    steps = (
+        ("ripristino proxy", lambda: system_proxy.restore_original_proxy(BACKUP_PATH)),
+        ("rimozione regola QUIC", firewall.remove_quic_block),
+        ("disattivazione lockdown", firewall.disable_lockdown),
+        ("rimozione policy browser", browser_policy.remove_policies),
+    )
+    for desc, fn in steps:
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001 - il cleanup deve proseguire
+            log.warning("Cleanup: %s fallito: %s", desc, e)
     log.info("Cleanup completato")
 
 
@@ -200,10 +255,12 @@ def run(apply_system=True):
         log.error("Autenticazione Firebase fallita: %s", e)
     fb.start()
 
-    # 4. Thread di supporto: riapplicazione periodica del proxy (anti-manomissione)
+    # 4. Thread di supporto: riapplicazione proxy (anti-manomissione) e
+    #    watchdog anti-blocco (riapre l'uscita se l'agente resta isolato).
     stop_event = threading.Event()
     if apply_system:
         threading.Thread(target=reapply_proxy_loop, args=(address, stop_event), daemon=True).start()
+        threading.Thread(target=lockdown_watchdog, args=(fb, watcher, stop_event), daemon=True).start()
 
     # 5. Proxy di filtraggio (blocca finché il servizio è attivo)
     try:

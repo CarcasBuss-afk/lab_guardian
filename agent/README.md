@@ -139,19 +139,24 @@ Se uno di questi controlli non risulta pulito, vedi
 ## 7. Ripristino di emergenza
 
 Se la disinstallazione automatica fallisce e il PC resta senza Internet (proxy
-ancora impostato), ripristina a mano:
+ancora impostato o firewall in lockdown), esegui questi comandi come
+**amministratore** (PowerShell). Ripristinano tutto anche senza l'agente.
 
-1. **Rimuovi le policy proxy** (come admin, da `regedit`):
-   - `HKLM\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\Internet Settings`
-     → elimina `ProxySettingsPerUser`.
-   - `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings`
-     → metti `ProxyEnable=0` (o elimina `ProxyEnable`/`ProxyServer`).
-   - `HKLM\SOFTWARE\Policies\Microsoft\Internet Explorer\Control Panel`
-     → elimina `Proxy`.
-2. **Rimuovi la regola firewall**:
-   ```bat
-   netsh advfirewall firewall delete rule name="LabGuardian Block QUIC (UDP 443)"
+1. **Firewall** — riapri l'uscita e togli TUTTE le regole Lab Guardian
+   (egress-lockdown + QUIC):
+   ```powershell
+   Set-NetFirewallProfile -All -DefaultOutboundAction Allow
+   Get-NetFirewallRule -DisplayName "LabGuardian*" | Remove-NetFirewallRule -ErrorAction SilentlyContinue
    ```
+2. **Proxy di sistema** — disattiva il proxy macchina e le policy:
+   ```bat
+   reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f
+   reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyServer /f
+   reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyOverride /f
+   reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxySettingsPerUser /f
+   reg delete "HKLM\SOFTWARE\Policies\Microsoft\Internet Explorer\Control Panel" /v Proxy /f
+   ```
+   (Gli errori "valore non trovato" sono normali.)
 3. **Policy browser** (facoltativo): elimina `QuicAllowed`/`ProxyMode` in
    `HKLM\SOFTWARE\Policies\Google\Chrome` e `...\Microsoft\Edge`; elimina
    `C:\Program Files\Mozilla Firefox\distribution\policies.json` se contiene solo Proxy.
@@ -159,6 +164,7 @@ ancora impostato), ripristina a mano:
    ```bat
    sc delete LabGuardianAgent
    ```
+Poi riapri il browser.
 
 ---
 

@@ -28,6 +28,9 @@ export const PRESETS: Preset[] = [
     whitelist: [
       "google.com",
       "*.google.com",
+      // Domini Google regionali italiani (es. accounts.google.it nel login)
+      "google.it",
+      "*.google.it",
       "*.googleapis.com",
       "*.gstatic.com",
       "*.googleusercontent.com",
