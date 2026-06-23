@@ -50,8 +50,10 @@ REM Genera config.json
 >> "%INSTALL%\config.json" echo   "heartbeatSeconds": 30
 >> "%INSTALL%\config.json" echo }
 
-REM Limita l'accesso al config (solo SYSTEM e Amministratori)
-icacls "%INSTALL%\config.json" /inheritance:r /grant:r "SYSTEM:F" "Administrators:F" >nul
+REM Limita l'accesso all'INTERA cartella (solo SYSTEM e Amministratori):
+REM gli studenti non potranno leggere config, log, backup ne' i binari.
+REM I file creati dopo (agent.log, proxy_backup.json) ereditano questi permessi.
+icacls "%INSTALL%" /inheritance:r /grant:r "SYSTEM:F" "Administrators:F" /T >nul
 
 REM Registra ed avvia il servizio come SYSTEM
 "%INSTALL%\nssm.exe" install %SERVICE% "%INSTALL%\lab-agent.exe" || goto :error

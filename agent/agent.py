@@ -74,15 +74,20 @@ def reapply_proxy_loop(address, stop_event):
 
 
 class ConfigWatcher:
-    """Aggiorna lo stato e, quando il blocco viene ATTIVATO, chiude i browser e
-    ne pulisce la cache. Si attiva solo sulla transizione "non bloccato ->
-    bloccato" (attivazione filtro aula o PC su "Bloccato"), NON sulle modifiche
-    di whitelist/blacklist.
+    """Aggiorna lo stato e reagisce alle transizioni del blocco.
+
+    Quando il PC passa a "restrittivo" (filtro aula attivo o PC su "Bloccato"):
+    - alza l'egress-lockdown del firewall (default-deny in uscita);
+    - alla transizione non-bloccato -> bloccato chiude i browser e pulisce la
+      cache (NON sulle modifiche di whitelist/blacklist, e non al primo avvio).
+
+    Quando torna "non restrittivo" abbassa il lockdown e il PC torna normale.
     """
 
-    def __init__(self, state, enforce_enabled):
+    def __init__(self, state, enforce_enabled, agent_program=None):
         self.state = state
         self.enforce_enabled = enforce_enabled
+        self.agent_program = agent_program
         self._prev_restrictive = None
 
     @staticmethod
@@ -97,10 +102,20 @@ class ConfigWatcher:
     def on_update(self, lab):
         self.state.update_from_lab(lab)
         restrictive = self._is_restrictive(self.state.snapshot())
-        # Trigger solo alla transizione non-restrittivo -> restrittivo
-        if self.enforce_enabled and self._prev_restrictive is False and restrictive:
-            log.info("Blocco attivato: avvio chiusura browser e pulizia cache")
-            threading.Thread(target=browser_control.enforce_clean, daemon=True).start()
+
+        # Reagisce solo quando lo stato restrittivo cambia (incluso il primo
+        # update all'avvio, dove _prev_restrictive vale None).
+        if self.enforce_enabled and restrictive != self._prev_restrictive:
+            if restrictive:
+                firewall.enable_lockdown(self.agent_program)
+                # Chiusura browser + pulizia cache solo su ATTIVAZIONE reale
+                # (non al primo avvio del servizio col blocco gia' attivo).
+                if self._prev_restrictive is False:
+                    log.info("Blocco attivato: avvio chiusura browser e pulizia cache")
+                    threading.Thread(target=browser_control.enforce_clean, daemon=True).start()
+            else:
+                firewall.disable_lockdown()
+
         self._prev_restrictive = restrictive
 
 
@@ -137,6 +152,7 @@ def cleanup(config):
 
     system_proxy.restore_original_proxy(BACKUP_PATH)
     firewall.remove_quic_block()
+    firewall.disable_lockdown()  # ripristina l'uscita predefinita e toglie le regole
     browser_policy.remove_policies()
     log.info("Cleanup completato")
 
@@ -168,7 +184,10 @@ def run(apply_system=True):
     #    Il watcher chiude i browser quando il blocco viene attivato (solo in
     #    installazione reale, mai in modalità --test).
     state = FilterState(hostname)
-    watcher = ConfigWatcher(state, enforce_enabled=apply_system)
+    # Percorso dell'eseguibile dell'agente: serve al firewall per consentirgli
+    # l'uscita anche a lockdown attivo (solo se "congelato" con PyInstaller).
+    agent_program = sys.executable if getattr(sys, "frozen", False) else None
+    watcher = ConfigWatcher(state, enforce_enabled=apply_system, agent_program=agent_program)
     fb = FirebaseAgent(
         config["apiKey"], config["databaseURL"], config["room"],
         config["agentEmail"], config["agentPassword"], hostname,

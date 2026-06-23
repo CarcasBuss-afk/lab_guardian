@@ -22,11 +22,29 @@ export const PRESETS: Preset[] = [
     whitelist: ["*.kahoot.com", "*.kahoot.it", "fonts.googleapis.com", "fonts.gstatic.com"],
   },
   {
-    id: "classroom",
-    label: "Google Classroom",
-    description: "Servizi Google, con YouTube bloccato.",
-    whitelist: ["*.google.com", "*.googleapis.com", "*.gstatic.com", "*.googleusercontent.com"],
-    blacklist: ["youtube.com", "*.youtube.com", "youtu.be", "*.ytimg.com", "*.googlevideo.com"],
+    id: "google_scolastico",
+    label: "Solo Google Scolastico",
+    description: "Tutti gli strumenti Google (Classroom, Drive, Gmail, Documenti…); bloccati YouTube e Google Sites.",
+    whitelist: [
+      "google.com",
+      "*.google.com",
+      "*.googleapis.com",
+      "*.gstatic.com",
+      "*.googleusercontent.com",
+      "*.ggpht.com",
+      "*.gvt1.com",
+      "*.gvt2.com",
+    ],
+    blacklist: [
+      // YouTube (non sta sotto *.google.com, ma lo blocchiamo esplicitamente)
+      "youtube.com",
+      "*.youtube.com",
+      "youtu.be",
+      "*.ytimg.com",
+      "*.googlevideo.com",
+      // Google Sites: ricade sotto *.google.com, la blacklist ha priorità e lo blocca
+      "sites.google.com",
+    ],
   },
   {
     id: "python_docs",
