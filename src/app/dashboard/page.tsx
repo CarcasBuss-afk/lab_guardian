@@ -15,28 +15,32 @@ import {
   setWhitelist,
   setBlacklist,
   setMessage,
-  applyPreset,
+  setLists,
   addPc,
   removePc,
   setPcOverride,
+  setAllPcOverride,
+  type LabSummary,
 } from "@/lib/labs";
 import type { LabConfig, PcOverride } from "@/types/lab";
-import type { Preset } from "@/lib/presets";
+import { togglePreset, type Preset } from "@/lib/presets";
 import LabSelector from "@/components/dashboard/LabSelector";
 import LabToggle from "@/components/dashboard/LabToggle";
 import DomainListEditor from "@/components/dashboard/DomainListEditor";
 import MessageEditor from "@/components/dashboard/MessageEditor";
 import PresetBar from "@/components/dashboard/PresetBar";
 import PcList from "@/components/dashboard/PcList";
+import Toast from "@/components/layout/Toast";
 
 export default function DashboardPage() {
   const { user, loading, logout } = useAuth();
   const router = useRouter();
 
-  const [labs, setLabs] = useState<string[]>([]);
+  const [labs, setLabs] = useState<LabSummary[]>([]);
   const [room, setRoom] = useState<string | null>(null);
   const [config, setConfig] = useState<LabConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
   // Protezione rotta: se non autenticato torna al login
   useEffect(() => {
@@ -51,7 +55,7 @@ export default function DashboardPage() {
     listLabs()
       .then((rooms) => {
         setLabs(rooms);
-        setRoom((current) => current ?? rooms[0] ?? null);
+        setRoom((current) => current ?? rooms[0]?.room ?? null);
       })
       .catch((err) => setError(handleError(err)));
   }, [user]);
@@ -62,15 +66,25 @@ export default function DashboardPage() {
       setConfig(null);
       return;
     }
-    const unsubscribe = subscribeLab(room, setConfig);
+    const unsubscribe = subscribeLab(room, (cfg) => {
+      setConfig(cfg);
+      // Mantiene allineato il pallino di stato dell'aula corrente nel selettore
+      if (cfg) {
+        setLabs((prev) =>
+          prev.map((l) => (l.room === room ? { ...l, active: cfg.active } : l))
+        );
+      }
+    });
     return unsubscribe;
   }, [room]);
 
-  // Esegue un'azione gestendo gli errori in modo uniforme
-  async function run(action: Promise<void>) {
+  // Esegue un'azione gestendo gli errori in modo uniforme e mostrando,
+  // a buon fine, una micro-conferma (toast) che la modifica è propagata.
+  async function run(action: Promise<void>, confirmation = "Modifica applicata") {
     try {
       setError(null);
       await action;
+      setToast(confirmation);
     } catch (err) {
       setError(handleError(err));
     }
@@ -78,8 +92,23 @@ export default function DashboardPage() {
 
   async function handleCreate(newRoom: string) {
     await run(createLab(newRoom));
-    setLabs((prev) => (prev.includes(newRoom) ? prev : [...prev, newRoom]));
+    setLabs((prev) =>
+      prev.some((l) => l.room === newRoom)
+        ? prev
+        : [...prev, { room: newRoom, active: false }]
+    );
     setRoom(newRoom);
+  }
+
+  // Attiva/disattiva una categoria: somma o rimuove i suoi domini dalle liste
+  function handleTogglePreset(preset: Preset) {
+    if (!room || !config) return;
+    const next = togglePreset(
+      preset,
+      config.whitelist ?? [],
+      config.blacklist ?? []
+    );
+    run(setLists(room, next.whitelist, next.blacklist));
   }
 
   function handleLogout() {
@@ -96,6 +125,11 @@ export default function DashboardPage() {
   }
 
   const pcs = config?.pcs ?? {};
+  // Filtro attivo ma senza alcuna regola: di fatto gli studenti restano liberi
+  const noRules =
+    !!config?.active &&
+    (config.whitelist?.length ?? 0) === 0 &&
+    (config.blacklist?.length ?? 0) === 0;
 
   return (
     <div className="flex flex-1 flex-col bg-zinc-50">
@@ -143,7 +177,18 @@ export default function DashboardPage() {
               onToggle={(active) => run(setActive(room, active))}
             />
 
-            <PresetBar onApply={(preset: Preset) => run(applyPreset(room, preset))} />
+            {noRules && (
+              <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                Filtro attivo ma nessuna regola impostata: gli studenti restano
+                liberi. Aggiungi una whitelist o applica un preset.
+              </p>
+            )}
+
+            <PresetBar
+              whitelist={config.whitelist ?? []}
+              blacklist={config.blacklist ?? []}
+              onToggle={handleTogglePreset}
+            />
 
             <DomainListEditor
               title="Whitelist (siti permessi)"
@@ -169,12 +214,17 @@ export default function DashboardPage() {
               onSetOverride={(pcId, override: PcOverride) =>
                 run(setPcOverride(room, pcId, override))
               }
+              onSetAllOverride={(override: PcOverride) =>
+                run(setAllPcOverride(room, Object.keys(pcs), override))
+              }
               onAddPc={(pcId) => run(addPc(room, pcId))}
               onRemovePc={(pcId) => run(removePc(room, pcId))}
             />
           </>
         )}
       </main>
+
+      <Toast message={toast} onDismiss={() => setToast(null)} />
     </div>
   );
 }

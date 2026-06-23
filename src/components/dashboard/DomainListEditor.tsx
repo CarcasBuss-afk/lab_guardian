@@ -17,6 +17,10 @@ interface DomainListEditorProps {
   variant: "allow" | "deny";
 }
 
+// Dominio valido: opzionale wildcard "*.", poi etichette separate da punto
+// e un TLD finale (es. "google.com", "*.google.com", "docs.python.org").
+const DOMAIN_RE = /^(\*\.)?([a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/;
+
 export default function DomainListEditor({
   title,
   domains,
@@ -24,15 +28,25 @@ export default function DomainListEditor({
   variant,
 }: DomainListEditorProps) {
   const [value, setValue] = useState("");
+  const [warning, setWarning] = useState<string | null>(null);
 
   function addDomain() {
     const domain = value.trim().toLowerCase();
-    if (!domain || domains.includes(domain)) {
+    if (!domain) {
       setValue("");
+      return;
+    }
+    if (domains.includes(domain)) {
+      setWarning("Dominio già presente in lista.");
+      return;
+    }
+    if (!DOMAIN_RE.test(domain)) {
+      setWarning("Formato non valido. Esempi: google.com, *.google.com");
       return;
     }
     onChange([...domains, domain]);
     setValue("");
+    setWarning(null);
   }
 
   function removeDomain(domain: string) {
@@ -59,7 +73,10 @@ export default function DomainListEditor({
         <input
           type="text"
           value={value}
-          onChange={(e) => setValue(e.target.value)}
+          onChange={(e) => {
+            setValue(e.target.value);
+            if (warning) setWarning(null);
+          }}
           onKeyDown={handleKeyDown}
           placeholder="es. *.google.com"
           className="flex-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900"
@@ -73,6 +90,8 @@ export default function DomainListEditor({
           Aggiungi
         </button>
       </div>
+
+      {warning && <p className="text-xs text-amber-700">{warning}</p>}
 
       {domains.length === 0 ? (
         <p className="text-sm text-zinc-400">Nessun dominio.</p>

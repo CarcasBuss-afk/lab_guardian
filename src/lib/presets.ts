@@ -62,3 +62,47 @@ export const PRESETS: Preset[] = [
     whitelist: ["www.w3schools.com", "*.w3schools.com"],
   },
 ];
+
+// Verifica se un preset è "attivo": tutti i suoi domini sono già nelle liste.
+// Un preset senza domini non è mai considerato attivo.
+export function isPresetActive(
+  preset: Preset,
+  whitelist: string[],
+  blacklist: string[]
+): boolean {
+  const w = preset.whitelist ?? [];
+  const b = preset.blacklist ?? [];
+  if (w.length === 0 && b.length === 0) return false;
+  return w.every((d) => whitelist.includes(d)) && b.every((d) => blacklist.includes(d));
+}
+
+// Attiva/disattiva un preset sulle liste correnti e restituisce le nuove liste.
+// - Se non attivo: aggiunge i suoi domini (dedup, preservando l'ordine esistente).
+// - Se attivo: rimuove i suoi domini, ma conserva quelli ancora richiesti da
+//   altre categorie rimaste attive (gestione delle sovrapposizioni).
+export function togglePreset(
+  preset: Preset,
+  whitelist: string[],
+  blacklist: string[]
+): { whitelist: string[]; blacklist: string[] } {
+  if (isPresetActive(preset, whitelist, blacklist)) {
+    // Domini da preservare perché condivisi con altre categorie attive
+    const stillActive = PRESETS.filter(
+      (p) => p.id !== preset.id && isPresetActive(p, whitelist, blacklist)
+    );
+    const keepW = new Set(stillActive.flatMap((p) => p.whitelist ?? []));
+    const keepB = new Set(stillActive.flatMap((p) => p.blacklist ?? []));
+    const removeW = new Set((preset.whitelist ?? []).filter((d) => !keepW.has(d)));
+    const removeB = new Set((preset.blacklist ?? []).filter((d) => !keepB.has(d)));
+    return {
+      whitelist: whitelist.filter((d) => !removeW.has(d)),
+      blacklist: blacklist.filter((d) => !removeB.has(d)),
+    };
+  }
+  const addW = (preset.whitelist ?? []).filter((d) => !whitelist.includes(d));
+  const addB = (preset.blacklist ?? []).filter((d) => !blacklist.includes(d));
+  return {
+    whitelist: [...whitelist, ...addW],
+    blacklist: [...blacklist, ...addB],
+  };
+}
