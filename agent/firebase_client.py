@@ -99,23 +99,38 @@ class FirebaseAgent:
 
     # --- Streaming della configurazione (SSE) ---
 
-    def _apply_patch(self, path, data):
-        """Applica un evento SSE alla copia locale della configurazione."""
-        if path == "/":
+    def _set_node(self, path, data):
+        """PUT: sostituisce il nodo in path con data (None = elimina)."""
+        if path in ("", "/"):
             self._lab = data if isinstance(data, dict) else {}
             return
-        # path tipo "/active" o "/pcs/PC-01/override"
         keys = [k for k in path.split("/") if k]
         node = self._lab
         for key in keys[:-1]:
-            node = node.setdefault(key, {})
-            if not isinstance(node, dict):
-                return
+            child = node.get(key)
+            if not isinstance(child, dict):
+                child = {}
+                node[key] = child
+            node = child
         last = keys[-1]
         if data is None:
             node.pop(last, None)
         else:
             node[last] = data
+
+    def _apply_event(self, event, path, data):
+        """Applica un evento SSE alla copia locale della configurazione.
+
+        - put:   sostituisce il nodo in path con data.
+        - patch: unisce i figli di data nel nodo in path, lasciando intatti gli
+                 altri campi (es. 'patch / {active:true}' NON cancella whitelist).
+        """
+        if event == "patch" and isinstance(data, dict):
+            base = "" if path == "/" else path.rstrip("/")
+            for key, value in data.items():
+                self._set_node(f"{base}/{key}", value)
+        else:
+            self._set_node(path, data)
 
     def _stream_loop(self):
         """Mantiene aperto lo streaming, riconnettendo in caso di caduta."""
@@ -123,7 +138,13 @@ class FirebaseAgent:
         while not self._stop.is_set():
             try:
                 self._refresh_if_needed()
-                headers = {"Accept": "text/event-stream"}
+                # Accept-Encoding identity + no-cache: niente compressione/buffer
+                # intermedi, così gli eventi SSE arrivano subito.
+                headers = {
+                    "Accept": "text/event-stream",
+                    "Accept-Encoding": "identity",
+                    "Cache-Control": "no-cache",
+                }
                 url = f"{self._lab_path()}?auth={self._id_token}"
                 with self._session.get(url, headers=headers, stream=True, timeout=(15, 75)) as resp:
                     resp.raise_for_status()
@@ -131,7 +152,8 @@ class FirebaseAgent:
                     backoff = 2
                     log.info("Streaming configurazione attivo")
                     event = None
-                    for raw in resp.iter_lines(decode_unicode=True):
+                    # chunk_size=1: nessun buffering lato requests, propagazione immediata
+                    for raw in resp.iter_lines(decode_unicode=True, chunk_size=1):
                         if self._stop.is_set():
                             break
                         if raw is None or raw == "":
@@ -143,7 +165,7 @@ class FirebaseAgent:
                             if event in ("put", "patch") and payload and payload != "null":
                                 try:
                                     msg = json.loads(payload)
-                                    self._apply_patch(msg.get("path", "/"), msg.get("data"))
+                                    self._apply_event(event, msg.get("path", "/"), msg.get("data"))
                                     self.on_update(dict(self._lab))
                                 except ValueError:
                                     pass
