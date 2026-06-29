@@ -24,11 +24,16 @@ REFRESH_URL = "https://securetoken.googleapis.com/v1/token"
 
 # I token ID scadono dopo ~1h: li rinnoviamo con margine
 TOKEN_TTL_SECONDS = 3000
+# Vita effettiva di un token ID Firebase (~1h)
+TOKEN_LIFETIME_SECONDS = 3600
+# Ricicla la connessione streaming con questo anticipo sulla scadenza del token
+# con cui e' stata aperta (Firebase la chiude/rende "zombie" a token scaduto).
+STREAM_RECYCLE_MARGIN = 300
 
 
 class FirebaseAgent:
     def __init__(self, api_key, database_url, room, email, password, hostname,
-                 on_update, heartbeat_seconds=30):
+                 on_update, heartbeat_seconds=30, reconcile_seconds=60):
         self.api_key = api_key
         self.database_url = database_url.rstrip("/")
         self.room = room
@@ -37,6 +42,7 @@ class FirebaseAgent:
         self.hostname = hostname
         self.on_update = on_update
         self.heartbeat_seconds = heartbeat_seconds
+        self.reconcile_seconds = reconcile_seconds
 
         # Sessione che IGNORA il proxy di sistema/registro: l'agente deve
         # parlare con Firebase direttamente, mai attraverso il proxy locale.
@@ -49,6 +55,14 @@ class FirebaseAgent:
         self._lab = {}  # ultima configurazione nota dell'aula
         self._stop = threading.Event()
         self._connected = threading.Event()  # streaming attivo
+        # Serializza le chiamate a on_update e le modifiche a _lab: ora ci sono
+        # DUE produttori (lo streaming e la riconciliazione periodica) e
+        # on_update agisce sul firewall, quindi non deve mai girare in parallelo.
+        self._update_lock = threading.Lock()
+        # Istante dell'ultima sincronizzazione RIUSCITA (stream o riconciliazione):
+        # il watchdog anti-blocco lo usa per accorgersi anche di uno stream
+        # "zombie" (connesso ma che non consegna piu' eventi).
+        self._last_sync = time.time()
         self._threads = []
 
     # --- Autenticazione ---
@@ -90,6 +104,19 @@ class FirebaseAgent:
     @property
     def connected(self):
         return self._connected.is_set()
+
+    @property
+    def seconds_since_sync(self):
+        """Secondi trascorsi dall'ultima sincronizzazione riuscita."""
+        return time.time() - self._last_sync
+
+    def _dispatch_update(self):
+        """Inoltra lo stato a on_update e marca la sincronizzazione.
+
+        DEVE essere chiamato dentro self._update_lock (lo invocano sia lo
+        streaming sia la riconciliazione)."""
+        self.on_update(dict(self._lab))
+        self._last_sync = time.time()
 
     def _lab_path(self):
         return f"{self.database_url}/labs/{self.room}.json"
@@ -133,11 +160,23 @@ class FirebaseAgent:
             self._set_node(path, data)
 
     def _stream_loop(self):
-        """Mantiene aperto lo streaming, riconnettendo in caso di caduta."""
+        """Mantiene aperto lo streaming, riconnettendo in caso di caduta.
+
+        La connessione viene RICICLATA proattivamente prima che il token con cui
+        e' stata aperta scada: Firebase chiude (o rende "zombie") lo stream a
+        token scaduto, ed e' cosi' che un PC era rimasto bloccato. Riaprendo con
+        un token fresco lo stream resta sempre reattivo.
+        """
         backoff = 2
         while not self._stop.is_set():
             try:
                 self._refresh_if_needed()
+                # Scadenza di questa connessione: ricicla con margine prima che il
+                # token corrente muoia (non meno di 60s per evitare loop stretti).
+                token_age = time.time() - self._token_acquired_at
+                deadline = time.time() + max(
+                    60, TOKEN_LIFETIME_SECONDS - token_age - STREAM_RECYCLE_MARGIN
+                )
                 # Accept-Encoding identity + no-cache: niente compressione/buffer
                 # intermedi, così gli eventi SSE arrivano subito.
                 headers = {
@@ -156,19 +195,30 @@ class FirebaseAgent:
                     for raw in resp.iter_lines(decode_unicode=True, chunk_size=1):
                         if self._stop.is_set():
                             break
+                        # Riciclo proattivo: riapri con un token fresco prima della
+                        # scadenza. Il keep-alive SSE (~30s) sveglia il loop in tempo.
+                        if time.time() >= deadline:
+                            log.info("Riciclo proattivo dello streaming (token in scadenza)")
+                            break
                         if raw is None or raw == "":
                             continue
                         if raw.startswith("event:"):
                             event = raw[len("event:"):].strip()
+                            # Token revocato o permessi persi: Firebase sta chiudendo
+                            # lo stream. Riconnetti subito con un token fresco.
+                            if event in ("auth_revoked", "cancel"):
+                                log.info("Evento '%s' dallo streaming: riconnetto", event)
+                                break
                         elif raw.startswith("data:"):
                             payload = raw[len("data:"):].strip()
                             if event in ("put", "patch") and payload and payload != "null":
                                 try:
                                     msg = json.loads(payload)
-                                    self._apply_event(event, msg.get("path", "/"), msg.get("data"))
-                                    self.on_update(dict(self._lab))
                                 except ValueError:
-                                    pass
+                                    continue
+                                with self._update_lock:
+                                    self._apply_event(event, msg.get("path", "/"), msg.get("data"))
+                                    self._dispatch_update()
             except requests.RequestException as e:
                 log.warning("Streaming interrotto: %s", e)
             finally:
@@ -177,6 +227,45 @@ class FirebaseAgent:
                 break
             time.sleep(backoff)
             backoff = min(backoff * 2, 60)
+
+    # --- Riconciliazione periodica (pull) ---
+
+    def _fetch_lab(self):
+        """GET singola dello stato dell'aula. Ritorna il dict (o None)."""
+        self._refresh_if_needed()
+        url = f"{self._lab_path()}?auth={self._id_token}"
+        resp = self._session.get(url, timeout=15)
+        resp.raise_for_status()
+        return resp.json()
+
+    def _reconcile_loop(self):
+        """Riallinea periodicamente lo stato reale con Firebase (rete di sicurezza).
+
+        Lo streaming e' push: se perde un evento (token scaduto sulla connessione
+        lunga, glitch di rete, NAT della scuola, stream "zombie") lo stato del
+        firewall puo' restare divergente all'infinito. Questo loop fa una GET REST
+        secca ogni 'reconcile_seconds' e la passa allo stesso on_update: cosi' un
+        cambiamento perso (es. blocco rimosso) viene comunque applicato entro un
+        minuto e un PC non puo' restare bloccato per sempre. La richiesta e' breve
+        (si apre e chiude subito, come l'heartbeat) quindi non soffre il problema
+        di scadenza token della connessione streaming.
+        """
+        while not self._stop.is_set():
+            self._stop.wait(self.reconcile_seconds)
+            if self._stop.is_set():
+                break
+            try:
+                data = self._fetch_lab()
+            except requests.RequestException as e:
+                log.debug("Riconciliazione fallita: %s", e)
+                continue
+            if not isinstance(data, dict):
+                continue
+            with self._update_lock:
+                # La GET ritorna lo stato AUTORITATIVO completo: sostituisce la
+                # copia locale (lo streaming poi continua a fare merge da qui).
+                self._lab = data
+                self._dispatch_update()
 
     # --- Heartbeat ---
 
@@ -214,7 +303,7 @@ class FirebaseAgent:
     # --- Ciclo di vita ---
 
     def start(self):
-        for target in (self._stream_loop, self._heartbeat_loop):
+        for target in (self._stream_loop, self._heartbeat_loop, self._reconcile_loop):
             t = threading.Thread(target=target, daemon=True)
             t.start()
             self._threads.append(t)

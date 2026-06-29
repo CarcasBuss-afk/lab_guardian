@@ -80,38 +80,38 @@ def reapply_proxy_loop(address, stop_event):
         stop_event.wait(10)
 
 
-def lockdown_watchdog(fb, watcher, stop_event, grace_seconds=90):
+def lockdown_watchdog(fb, watcher, stop_event, grace_seconds=150):
     """Rete di sicurezza anti-blocco.
 
-    Se il muro del firewall e' alzato ma l'agente perde la connessione a
-    Firebase per piu' di 'grace_seconds', abbassa il muro: cosi' un PC non puo'
-    mai restare bloccato in modo irreversibile. Il filtraggio per dominio resta
-    comunque garantito dal proxy locale (modalita' degradata, finche' non si
-    riattiva esplicitamente il blocco).
+    Se il muro del firewall e' alzato ma l'agente non riesce a sincronizzarsi
+    con Firebase (ne' via streaming ne' via riconciliazione) per piu' di
+    'grace_seconds', sta "volando alla cieca": abbassa il muro, cosi' un PC non
+    puo' mai restare bloccato in modo irreversibile. Il filtraggio per dominio
+    resta comunque garantito dal proxy locale (modalita' degradata, finche' non
+    si riattiva esplicitamente il blocco).
+
+    Si basa sull'ULTIMA sincronizzazione riuscita (non sul semplice "sono
+    connesso"): cosi' intercetta anche lo stream "zombie" — connesso ma che non
+    consegna piu' eventi — che e' proprio il caso che aveva tenuto un PC bloccato
+    a token scaduto. Finche' la riconciliazione periodica funziona,
+    'seconds_since_sync' resta basso e il muro legittimamente attivo non viene
+    mai abbassato per errore.
     """
-    down_since = None
     while not stop_event.is_set():
         stop_event.wait(15)
         if stop_event.is_set():
             break
-        if watcher.lockdown_raised and not fb.connected:
-            now = time.time()
-            if down_since is None:
-                down_since = now
-            elif now - down_since >= grace_seconds:
-                log.warning(
-                    "Agente isolato da >%ds con lockdown attivo: abbasso il muro "
-                    "(filtra solo il proxy finche' non si riattiva il blocco)",
-                    grace_seconds,
-                )
-                firewall.disable_lockdown()
-                watcher.lockdown_raised = False
-                # Evita la ri-attivazione automatica (e quindi l'oscillazione):
-                # servira' una nuova transizione esplicita off->on per riprovare.
-                watcher._prev_restrictive = True
-                down_since = None
-        else:
-            down_since = None
+        if watcher.lockdown_raised and fb.seconds_since_sync >= grace_seconds:
+            log.warning(
+                "Nessuna sincronizzazione da >%ds con lockdown attivo: abbasso il "
+                "muro (filtra solo il proxy finche' non si riattiva il blocco)",
+                grace_seconds,
+            )
+            firewall.disable_lockdown()
+            watcher.lockdown_raised = False
+            # Evita la ri-attivazione automatica (e quindi l'oscillazione):
+            # servira' una nuova transizione esplicita off->on per riprovare.
+            watcher._prev_restrictive = True
 
 
 class ConfigWatcher:
@@ -248,6 +248,7 @@ def run(apply_system=True):
         config["agentEmail"], config["agentPassword"], hostname,
         on_update=watcher.on_update,
         heartbeat_seconds=config.get("heartbeatSeconds", 30),
+        reconcile_seconds=config.get("reconcileSeconds", 60),
     )
     try:
         fb.authenticate()

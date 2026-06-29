@@ -13,9 +13,12 @@ Priorità delle decisioni:
 """
 
 import fnmatch
+import logging
 import threading
 
 from mitmproxy import http
+
+log = logging.getLogger("labguardian.filter")
 
 
 class FilterState:
@@ -86,12 +89,22 @@ def is_allowed(host, snap):
 class LabFilter:
     def __init__(self, state):
         self.state = state
+        # Host gia' segnalati come bloccati: logghiamo ogni dominio UNA volta per
+        # sessione, cosi' agent.log resta leggibile (diagnosi "cosa serve all'allievo").
+        self._blocked_logged = set()
+
+    def _log_blocked(self, host):
+        """Registra un host bloccato (una sola volta per host)."""
+        if host not in self._blocked_logged:
+            self._blocked_logged.add(host)
+            log.info("DOMINIO BLOCCATO: %s", host)
 
     def http_connect(self, flow: http.HTTPFlow):
         """Filtra le richieste HTTPS sull'hostname del CONNECT (prima del TLS).
         Se il sito è bloccato, rifiuta il tunnel con un 403."""
         snap = self.state.snapshot()
         if not is_allowed(flow.request.host, snap):
+            self._log_blocked(flow.request.host)
             flow.response = http.Response.make(
                 403, snap["message"].encode("utf-8"),
                 {"Content-Type": "text/plain; charset=utf-8"},
@@ -107,6 +120,7 @@ class LabFilter:
         """Filtra le richieste HTTP in chiaro."""
         snap = self.state.snapshot()
         if not is_allowed(flow.request.pretty_host, snap):
+            self._log_blocked(flow.request.pretty_host)
             flow.response = http.Response.make(
                 403, snap["message"].encode("utf-8"),
                 {"Content-Type": "text/plain; charset=utf-8"},

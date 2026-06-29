@@ -41,6 +41,11 @@ agent/config.json
 agent/proxy_backup.json
 agent/agent.log
 
+# Client OAuth Google (gate login allievi — contiene client_secret, mai committare)
+agent/oauth_client.json
+*oauth_client*.json
+client_secret_*.json
+
 # Chiavetta USB assemblata (contiene credenziali agente, mai committare)
 usb/
 

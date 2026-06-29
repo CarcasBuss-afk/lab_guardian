@@ -61,6 +61,11 @@ accesso fisico.
 | D8 | Workspace | Confermato uso di Google Workspace con dominio scolastico. In **test** si usa un Firebase/Google Cloud personale; `hd` reale = dominio scuola in produzione. |
 | D9 | Architettura processi | **Estendere lab-guardian in monorepo modulare**, NON creare un servizio separato. Un solo **servizio SYSTEM** (enforcer: proxy/filtro, firewall, log siti, watcher file, reset al boot, stato sessione) + una **nuova app UI nella sessione utente** (solo il gate di login). Vincolo decisivo: l'isolamento della **Sessione 0** impedisce a un servizio di mostrare UI → l'app gate è comunque un secondo processo, qualunque scelta. Il servizio sorveglia/rilancia il gate. Comunicazione servizio↔gate: Firebase per stato (login richiesto / chi è loggato) + IPC locale (es. named pipe) per scambi a bassa latenza (dettaglio da definire). |
 | D10 | Tecnica del gate | **Overlay** (app fullscreen topmost nella sessione utente), NON kiosk nativo (Shell Launcher v2) né Credential Provider. Motivi: il kiosk nativo richiede edizione Enterprise/Education, **scontra con l'attivazione dinamica** dal docente (config statica dell'OS), alza il **rischio bricking** (shell che crasha = schermo nero) e complica install/dominio — tutto contro i nostri pilastri ("non bloccare mai il PC", attivazione dinamica, install USB semplice). L'overlay gira su qualsiasi edizione, è nativamente dinamico (Firebase) e a basso rischio bricking; in cambio è più debole contro chi è determinato (limiti noti nel Modulo 1). |
+| D11 | Sblocco offline | **Password docente locale di emergenza.** Una **sola** password (livello aula) impostata dalla dashboard, distribuita ai PC quando sono online e memorizzata localmente come **hash salato con KDF lento** (PBKDF2/scrypt/argon2) nella cartella ACL. Verificata **offline dal servizio SYSTEM** (l'overlay passa la password digitata via IPC; il segreto non vive mai nel processo utente). Effetti: abbassa **solo il gate** (il filtro web resta attivo), vale **solo per la sessione corrente** (non permanente), la sessione risulta **"non identificata"** nel log ed è sempre loggata; **lockout** dopo N tentativi contro il brute-force. Razionale: è la via di recupero indipendente dalla rete che permette di scegliere fail-closed offline **senza brickare** il PC. |
+| D12 | Tecnologia overlay | **App Python fullscreen topmost** (no WebView2). Riusa toolchain/PyInstaller dell'agente. Possibile perché il login NON sta più dentro l'overlay (vedi D13) → niente browser embedded da gestire, quindi la robustezza di un nativo .NET non serve. L'overlay è solo chrome: messaggio, pulsante "Accedi", avviso sessione monitorata, stato, voce discreta "Sblocco docente" (D11). |
+| D13 | Flusso OAuth | **System browser + redirect su loopback + PKCE** (RFC 8252). Il **webview embedded è scartato**: Google lo blocca dal 2023 con `disallowed_useragent`, **incluso WebView2**. L'overlay apre il browser di sistema in **modalità app/kiosk** (`--app=URL`, niente barra/schede) sull'URL Google con `hd=dominio`; un listener locale su `127.0.0.1` cattura il code → ID token. Durante il gate il firewall **whitelista solo i domini auth Google + loopback**. La **validazione del JWT** (firma via JWKS Google, `aud`, `exp`, `email_verified`, claim `hd`) la fa il **servizio SYSTEM**, non l'overlay: l'overlay (manomettibile) passa il JWT grezzo via IPC, così un allievo non può falsificare "sono loggato". |
+| D14 | Default offline del gate | **Fidarsi dell'ultimo stato noto (cache).** Offline: cache=ON → fail-closed + sblocco con password D11; cache=OFF o nessuna cache (primo avvio, feature opt-in) → PC aperto. Scartato il fail-closed totale offline (chiederebbe la password a ogni avvio offline anche quando la feature non è in uso). Residuo accettato: docente attiva il gate mentre il PC è spento *e* il PC riparte offline → in quel caso il PC è comunque senza internet, il file-watcher logga lo stesso in locale, e il gate compare appena si riconnette. |
+| D15 | Mitigazioni gate | Difesa **primaria = watchdog SYSTEM** che rilancia l'overlay nella sessione utente (`CreateProcessAsUser`) entro ~1-2s se ucciso/non in foreground (residuo: finestra di pochi secondi, accettato). Overlay **fullscreen multi-monitor, topmost, senza barra/controlli, con re-assert periodico del foreground**. Policy a supporto: `DisableTaskMgr`, `NoWinKeys`, `HideFastUserSwitching`. **Niente hook tastiera** (fragile, scarso ritorno: ci si affida a `NoWinKeys` + topmost). Premessa che riduce la superficie: logoff/riavvio/"disconnetti" da SAS **non** sono vie di fuga (autologon + gate-al-login li fanno rientrare nel gate); il SAS resta non intercettabile ma innocuo. |
 
 ---
 
@@ -78,6 +83,30 @@ utente, mostrata/nascosta dinamicamente in base al flag Firebase. Gira su
 qualsiasi edizione Windows, basso rischio bricking, coerente con la filosofia
 "alziamo l'asticella ~95%".
 
+**Implementazione e login (D12, D13).** L'overlay è un'**app Python fullscreen**
+(no WebView2): solo chrome (messaggio, "Accedi", avviso monitoraggio, stato,
+"Sblocco docente"). Il login **non** sta nell'overlay — Google blocca i webview
+embedded — ma nel **browser di sistema in modalità app** (`--app=URL`), via
+OAuth loopback + PKCE; durante il gate il firewall whitelista solo i domini auth
+Google + loopback, quindi quella finestra è murata e si chiude da sola dopo il
+redirect. Il **servizio SYSTEM** valida il JWT (firma, `aud`, `exp`, claim `hd`)
+ricevuto dall'overlay via IPC, così l'esito non è falsificabile dall'allievo.
+
+> **Validato (Spike A)** — `agent/spike_oauth.py` ha dimostrato end-to-end il
+> flusso (loopback + PKCE + scambio code) e la validazione del JWT via JWKS, con
+> un account Workspace reale (`hd=ciacdidattica.it`).
+>
+> **Validato (Spike B1)** — `agent/spike_overlay.py`: overlay senza bordi che
+> copre **tutti i monitor** (desktop virtuale), re-assert periodico del topmost,
+> login integrato (riusa Spike A) con pulsante **Annulla/reset** per non restare
+> mai bloccati. Nodo noto rinviato a B2: z-order overlay vs finestra browser
+> (l'overlay non-topmost, se cliccato, copre il browser → per ora recuperabile
+> con Annulla; soluzione pulita quando il gate sara' lanciato dal servizio).
+>
+> **Da fare (Spike B2)** — parte dipendente dall'ambiente: servizio SYSTEM che
+> lancia l'overlay nella sessione utente (`CreateProcessAsUser`) + watchdog, da
+> provare sul PC di laboratorio.
+
 **Limiti noti dell'overlay (da mitigare):**
 - vive sopra il desktop, non lo sostituisce → un utente standard può tentare di
   chiuderlo. Mitigazione: Task Manager disabilitato via policy + **watchdog
@@ -93,6 +122,17 @@ qualsiasi edizione Windows, basso rischio bricking, coerente con la filosofia
 **Scartate** (vedi D10): *Shell Launcher v2* (edizione Enterprise/Education,
 scontro con attivazione dinamica, rischio schermo-nero) e *Credential Provider*
 (troppo complesso). Analisi completa nella cronologia delle decisioni.
+
+**Dipendenze dalla rete e sblocco offline.** Il gate dipende da **due** canali
+cloud, entrambi indisponibili offline: *Firebase* (sa se il gate è attivo / se
+il docente l'ha tolto) e *Google* (OAuth + validazione del JWT, che scarica le
+chiavi pubbliche). Senza rete l'identità è impossibile → tensione tra "tenere
+bloccato" (rischio brick) e "aprire" (gate aggirabile staccando la LAN). La
+risolve la **password docente di emergenza (D11)**: via di recupero indipendente
+dalla rete che consente fail-closed senza brick. Casi critici coperti: Google
+giù (Firebase ok), avvio offline con gate attivo, docente che ha disattivato ma
+il PC offline non lo sa, rete che cade durante l'OAuth. *Resta da decidere il
+comportamento di default quando il PC è offline e non sa lo stato del gate.*
 
 ### Modulo 2 — Monitoraggio sessione
 - **login/logout** → eventi con timestamp + macchina + email allievo.
@@ -143,14 +183,12 @@ scontro con attivazione dinamica, rischio schermo-nero) e *Credential Provider*
 ## 6. Questioni aperte
 
 - [x] Modulo 1: tecnica del gate → **overlay** (vedi D10).
-- [ ] Modulo 1 — **tecnologia dell'overlay**: con cosa lo costruiamo (es.
-      finestra WebView2 per ospitare il login Google, dato che OAuth gira meglio
-      in un browser embedded) e in che linguaggio, visto che il resto
-      dell'agente è in Python.
-- [ ] Modulo 1 — **flusso OAuth**: come l'overlay autentica con Google
-      `hd`-ristretto e come comunica l'esito al servizio (Firebase vs IPC locale).
-- [ ] Modulo 1 — **mitigazioni**: quali policy/hook attivare (anti Task Manager/
-      SAS, hook tastiera) e come il watchdog SYSTEM rilancia il gate.
+- [x] Modulo 1 — **tecnologia dell'overlay** → app Python fullscreen (D12).
+- [x] Modulo 1 — **flusso OAuth** → system browser + loopback PKCE, validazione
+      JWT lato servizio (D13).
+- [x] Modulo 1 — **sblocco offline** → password docente di emergenza (D11).
+- [x] Modulo 1 — **mitigazioni** → watchdog SYSTEM + policy, no hook tastiera (D15).
+- [x] Modulo 1 — **policy di default offline** → fidarsi della cache (D14).
 - [ ] Modulo 3: gestione file lockati durante la pulizia (timing rispetto
       all'autologon).
 - [ ] Modulo 4: fonte di categorizzazione dei contenuti a rischio (open feed vs
@@ -168,5 +206,50 @@ scontro con attivazione dinamica, rischio schermo-nero) e *Credential Provider*
   coprire il 95–99% dei casi alzando la soglia di difficoltà.
 - Boot da USB / altro OS resta fuori portata (solo BIOS lo chiude — rischio già
   accettato).
+- **Modalità provvisoria** (safe mode): il servizio potrebbe non partire →
+  desktop senza gate. Accettato come limite noto (richiede interrompere il boot,
+  livello "avanzato", coerente col boot-USB). Eventuale hardening futuro:
+  registrare il servizio per l'avvio anche in safe mode.
 - Log completo (tutti i siti per allievo) in locale è una scelta consapevole:
   più dati = più responsabilità di gestione/privacy.
+- **Teardown dei blocchi allo spegnimento**: valutato e **scartato**. Inaffidabile
+  (spegnimento brutale/crash = non gira; finestra di shutdown limitata), ridondante
+  con watchdog 90s + password D11, e aprirebbe una finestra di bypass all'avvio.
+  Il "PC spento non resta incastrato" è già garantito alla riaccensione.
+
+---
+
+## 8. Portabilità / migrazione (personale → Workspace scolastico)
+
+**Stato attuale**: si sviluppa sul progetto Firebase/Google Cloud **personale**
+(`lab-guardian`), in attesa della liberazione del progetto scolastico (cancellazione
+vecchi progetti, ~30 giorni). La migrazione futura al Workspace della scuola deve
+restare **meccanica**.
+
+### Regola di design (vincolante)
+**Mai valori Google hardcoded nel codice.** Project id, Web API key, database URL,
+account agente, **client OAuth** e soprattutto il **dominio `hd`** stanno solo in
+file di config/env. Migrare = cambiare il file di config, non il codice.
+
+### Checklist di migrazione (da eseguire quando il progetto scolastico è pronto)
+1. **Firebase**: nuovo progetto → abilitare Realtime Database + caricare
+   `database.rules.json`, abilitare Auth.
+2. **Account/credenziali**: ricreare account **agente** (email/password), account
+   **docente** + custom claim (`scripts/setTeacherClaim.mjs`), generare nuova
+   **chiave Admin SDK**, prendere la nuova **Web API key**.
+3. **OAuth**: nuova schermata di consenso + nuovo **client "App desktop"**
+   (come quello creato in test). Su Workspace, se il progetto è creato *dentro*
+   l'organizzazione, la consent screen può essere **Interna** → niente utenti di
+   test, niente verifica Google, `hd` naturale.
+4. **Dati RTDB** (aule, preset, PC): pochi → rifare a mano o export/import.
+5. **Agenti sui PC**: rigenerare `config.json` e reinstallare/aggiornare (USB).
+   Più tardi si migra, più PC ci sono da toccare.
+6. **Config del gate**: aggiornare client OAuth + impostare `hd` = dominio scuola
+   (**valore reale noto: `ciacdidattica.it`** — verificato via Spike A nel claim
+   `hd` di un account Workspace della scuola).
+
+### Punto Workspace da verificare con l'admin del dominio
+⚠️ Le scuole spesso **limitano le app OAuth di terze parti**: l'admin del Workspace
+potrebbe dover **autorizzare / marcare come "attendibile"** il nostro client OAuth,
+altrimenti il login allievi viene bloccato a livello di organizzazione. Da chiarire
+con chi gestisce il dominio **prima** del go-live.
