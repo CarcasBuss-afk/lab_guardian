@@ -33,6 +33,9 @@ export const PRESETS: Preset[] = [
       "*.google.it",
       "*.googleapis.com",
       "*.gstatic.com",
+      // Dominio "nudo": *.gstatic.com NON copre l'apex, da cui Classroom
+      // serve alcune immagini/asset (es. banner del corso → riquadro bianco).
+      "gstatic.com",
       "*.googleusercontent.com",
       "*.ggpht.com",
       "*.gvt1.com",

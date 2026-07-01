@@ -4,9 +4,12 @@ Agente da installare su ogni PC del laboratorio. Filtra il traffico web in base
 alle regole decise dal docente nella dashboard, in tempo reale, tramite Firebase.
 
 - **Architettura**: l'agente avvia un proxy locale (mitmproxy) su `127.0.0.1:8080`,
-  imposta il proxy di sistema e filtra le richieste per dominio. Per HTTPS decide
-  sull'hostname del `CONNECT` **senza decifrare** il traffico (nessun certificato
-  da installare).
+  imposta il proxy di sistema **e aggancia i browser (Chrome/Edge/Firefox) a quel
+  proxy tramite policy del browser** (`ProxyMode = fixed_servers`), che ha la
+  precedenza sul proxy di sistema/WPAD/PAC: così il filtro regge anche sui PC dove
+  un'organizzazione (GPO/MDM) impone un proxy automatico. Filtra le richieste per
+  dominio; per HTTPS decide sull'hostname del `CONNECT` **senza decifrare** il
+  traffico (nessun certificato da installare).
 - **Sicurezza credenziali**: l'agente NON usa la chiave admin. Si autentica come
   account "agente" a privilegi ridotti; le regole del database gli permettono di
   scrivere solo `online`/`lastSeen` del proprio PC.
@@ -157,7 +160,7 @@ ancora impostato o firewall in lockdown), esegui questi comandi come
    reg delete "HKLM\SOFTWARE\Policies\Microsoft\Internet Explorer\Control Panel" /v Proxy /f
    ```
    (Gli errori "valore non trovato" sono normali.)
-3. **Policy browser** (facoltativo): elimina `QuicAllowed`/`ProxyMode` in
+3. **Policy browser** (facoltativo): elimina `QuicAllowed`/`ProxyMode`/`ProxyServer` in
    `HKLM\SOFTWARE\Policies\Google\Chrome` e `...\Microsoft\Edge`; elimina
    `C:\Program Files\Mozilla Firefox\distribution\policies.json` se contiene solo Proxy.
 4. **Rimuovi il servizio** (se ancora presente):
@@ -175,7 +178,8 @@ Poi riapri il browser.
 | Il PC non compare in dashboard | Credenziali agente errate o niente rete | Controlla `config.json` e `agent.log` in `C:\Program Files\LabGuardian\` |
 | "Autenticazione Firebase fallita" nel log | Account agente inesistente o password errata | Verifica l'utente in Authentication |
 | Le scritture del docente sono negate | Claim `teacher` mancante | Riesegui `setTeacherClaim.mjs` e rifai login |
-| I siti bloccati si aprono lo stesso | QUIC attivo / browser non usa il proxy | Verifica regola firewall UDP 443 e policy browser; riavvia il browser |
+| I siti bloccati si aprono lo stesso | QUIC attivo / browser non usa il proxy | Verifica regola firewall UDP 443; su `chrome://policy` deve risultare `ProxyMode = fixed_servers`; riavvia il browser |
+| Anche i siti in whitelist non si aprono (PC gestito) | Proxy "gestito dall'organizzazione" che scavalca il nostro | Vedi la sez. 7 di `DIAGNOSTICA-SBLOCCO.txt` (policy browser `fixed_servers`) |
 | Nessun sito si apre dopo l'uninstall | Proxy non ripristinato | Vedi [Ripristino di emergenza](#7-ripristino-di-emergenza) |
 | L'antivirus blocca l'exe | Falso positivo PyInstaller | Aggiungi eccezione per la cartella di installazione |
 | HTTPS dei siti permessi dà errore certificato | Decifratura TLS attiva per errore | Non deve accadere: l'agente fa passthrough TCP. Segnalare con il log |

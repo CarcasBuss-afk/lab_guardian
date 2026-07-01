@@ -1,0 +1,148 @@
+============================================================
+ LAB GUARDIAN - Comandi di sblocco e diagnostica
+ Eseguire da PowerShell APERTO COME AMMINISTRATORE.
+ (Tasto Start -> scrivi "powershell" -> clic destro -> "Esegui come amministratore")
+============================================================
+
+
+------------------------------------------------------------
+ 1) SBLOCCO D'EMERGENZA COMPLETO
+    Ci sono DUE livelli: firewall + proxy di filtraggio.
+    Aprire il firewall NON basta: serve anche far ripartire
+    l'agente perche' rilegga lo stato e smetta di filtrare.
+    (Prima assicurarsi che sulla dashboard il blocco sia OFF.)
+    Il riavvio del PC NON basta: le regole sono persistenti.
+------------------------------------------------------------
+
+Set-NetFirewallProfile -All -DefaultOutboundAction Allow
+Get-NetFirewallRule -DisplayName "LabGuardian Lockdown*" | Remove-NetFirewallRule
+Restart-Service LabGuardianAgent
+
+
+------------------------------------------------------------
+ 1b) SBLOCCO DOPO UNA DISINSTALLAZIONE FALLITA
+    Se l'agente NON e' piu' installato (cartella cancellata) ma la
+    navigazione resta bloccata: il proxy di sistema e' rimasto puntato
+    a un proxy che non esiste piu'. Questi comandi lo resettano.
+    (Gli errori "valore non trovato" sono normali.)
+------------------------------------------------------------
+
+Set-NetFirewallProfile -All -DefaultOutboundAction Allow
+Get-NetFirewallRule -DisplayName "LabGuardian*" | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f
+reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyServer /f
+reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyOverride /f
+reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxySettingsPerUser /f
+reg delete "HKLM\SOFTWARE\Policies\Microsoft\Internet Explorer\Control Panel" /v Proxy /f
+
+
+------------------------------------------------------------
+ 2) DIAGNOSTICA - Log dell'agente
+    Mostra le ultime righe: cercare "Streaming interrotto" o
+    "Rinnovo token fallito" ripetuti DOPO l'attivazione del blocco.
+------------------------------------------------------------
+
+Get-Content "C:\Program Files\LabGuardian\agent.log" -Tail 40
+
+
+------------------------------------------------------------
+ 3) DIAGNOSTICA - Percorso autorizzato per l'agente
+    I due percorsi devono COINCIDERE. Se sono diversi, la regola
+    non autorizza il processo giusto (causa probabile del blocco).
+------------------------------------------------------------
+
+(Get-NetFirewallRule -DisplayName "LabGuardian Lockdown Allow Agent" | Get-NetFirewallApplicationFilter).Program
+(Get-CimInstance Win32_Service -Filter "Name='LabGuardianAgent'").PathName
+
+
+------------------------------------------------------------
+ 4) DIAGNOSTICA - Stato del firewall e regole Lab Guardian
+    Mostra l'azione di uscita predefinita (Block/Allow) e le regole.
+------------------------------------------------------------
+
+Get-NetFirewallProfile -All | Select-Object Name, DefaultOutboundAction
+Get-NetFirewallRule -DisplayName "LabGuardian*" | Select-Object DisplayName, Enabled, Direction, Action
+
+
+------------------------------------------------------------
+ 5) TEST RAPIDO - Uscita diretta verso un sito bloccato
+    A blocco ATTIVO deve dare TcpTestSucceeded: False.
+------------------------------------------------------------
+
+Test-NetConnection example.com -Port 443
+
+
+------------------------------------------------------------
+ 6) DIAGNOSTICA - Navigazione bloccata anche se il sito e' in whitelist
+    (tipico su un laboratorio NUOVO o su una rete diversa)
+    Sintomo: blocco attivo, Firebase e whitelist OK, ma il browser
+    non raggiunge NEMMENO i siti permessi (es. google).
+    Causa probabile: sulla rete e' stato rilevato un PROXY SCOLASTICO
+    "upstream" e mitmproxy vi instrada il traffico del browser; se quel
+    proxy e' sbagliato o irraggiungibile, anche i siti in whitelist
+    falliscono. Firebase invece funziona perche' l'agente lo raggiunge
+    IN DIRETTA (bypassa il proxy): per questo "sembra tutto a posto".
+------------------------------------------------------------
+
+Select-String -Path "C:\Program Files\LabGuardian\agent.log" -Pattern "Proxy in ascolto|scolastico upstream|DOMINIO BLOCCATO|server connect|error establishing" | Select-Object -Last 40
+
+  Come leggere il risultato:
+  - Riga "Proxy in ascolto su 127.0.0.1:8080 (upstream=...)":
+      * upstream=None            -> l'upstream NON e' la causa (vedi punti 1-5).
+      * upstream=<host:porta>    -> CAUSA CONFERMATA: proxy scolastico
+                                    rilevato e non funzionante.
+  - Aprendo google col blocco ATTIVO:
+      * NON compare "DOMINIO BLOCCATO: www.google.com" -> il traffico passa
+        il filtro ma muore verso l'upstream/rete (conferma il caso upstream).
+      * COMPARE  "DOMINIO BLOCCATO: www.google.com"    -> altro problema:
+        l'agente non "vede" la whitelist di Firebase; controllare che
+        "room" nel config.json corrisponda all'aula giusta:
+            Get-Content "C:\Program Files\LabGuardian\config.json"
+
+  Rimedio:
+  - Se la rete NON richiede un proxy (l'upstream e' un residuo/errore):
+    la correzione e' lato agente (ignorare/normalizzare l'upstream).
+  - Se la rete RICHIEDE quel proxy: va configurato correttamente
+    l'inoltro upstream. In entrambi i casi, intervento sul codice.
+
+
+------------------------------------------------------------
+ 7) PC GESTITO DALL'ORGANIZZAZIONE - il browser non passa dal proxy
+    Sintomo: blocco attivo, il browser NON apre nemmeno i siti in
+    whitelist e mostra "ERR_NETWORK_ACCESS_DENIED" (o "L'accesso a
+    Internet e' bloccato / il firewall potrebbe aver bloccato...").
+    In Impostazioni -> Rete -> Proxy compare "Alcune impostazioni sono
+    gestite dall'organizzazione" e la CONFIGURAZIONE AUTOMATICA proxy
+    e' attiva e BLOCCATA.
+    Causa: una policy dell'organizzazione (GPO/MDM) forza il proxy
+    automatico (WPAD/PAC) e ha la PRECEDENZA sul nostro proxy manuale.
+    Il browser va diretto, il firewall del lockdown lo taglia. NON
+    dipende dai permessi (anche da admin la policy dell'org resta).
+    NB: il blocco "funziona" lo stesso perche' e' il firewall a negare
+    tutto; ma la whitelist non serve, perche' il traffico non raggiunge
+    mai il nostro proxy.
+------------------------------------------------------------
+
+  Verifica/aggiramento: forzare Chrome/Edge sul nostro proxy tramite la
+  POLICY DEL BROWSER (ha precedenza sul proxy di sistema, WPAD/PAC
+  inclusi). Da PowerShell admin:
+
+New-Item -Path "HKLM:\Software\Policies\Google\Chrome" -Force | Out-Null
+Set-ItemProperty -Path "HKLM:\Software\Policies\Google\Chrome" -Name ProxyMode   -Value "fixed_servers"
+Set-ItemProperty -Path "HKLM:\Software\Policies\Google\Chrome" -Name ProxyServer -Value "127.0.0.1:8080"
+New-Item -Path "HKLM:\Software\Policies\Microsoft\Edge" -Force | Out-Null
+Set-ItemProperty -Path "HKLM:\Software\Policies\Microsoft\Edge" -Name ProxyMode   -Value "fixed_servers"
+Set-ItemProperty -Path "HKLM:\Software\Policies\Microsoft\Edge" -Name ProxyServer -Value "127.0.0.1:8080"
+
+  Poi in Chrome apri  chrome://policy  -> "Ricarica criteri":
+  - ProxyMode = fixed_servers con stato OK -> varco libero: chiudi TUTTE
+    le finestre di Chrome, riapri e riprova. I siti in whitelist devono
+    caricare.
+  - ProxyMode in CONFLITTO / IGNORATO (sovrascritto dall'organizzazione)
+    -> l'org blocca anche la policy del browser: non risolvibile in
+    locale, serve coordinarsi con l'IT (o usare un PC non gestito).
+
+  Per annullare la prova:
+
+Remove-ItemProperty -Path "HKLM:\Software\Policies\Google\Chrome"   -Name ProxyMode,ProxyServer -ErrorAction SilentlyContinue
+Remove-ItemProperty -Path "HKLM:\Software\Policies\Microsoft\Edge"  -Name ProxyMode,ProxyServer -ErrorAction SilentlyContinue

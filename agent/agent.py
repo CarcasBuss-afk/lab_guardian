@@ -229,7 +229,7 @@ def run(apply_system=True):
         # 2. Applica proxy di sistema, firewall (QUIC) e policy browser
         system_proxy.enable_filter_proxy(address)
         firewall.block_quic()
-        browser_policy.apply_policies()
+        browser_policy.apply_policies(address)
     else:
         # Modalità test: nessuna modifica al sistema. Imposta il proxy del
         # browser a mano su 127.0.0.1:8080 per provare il filtraggio.
